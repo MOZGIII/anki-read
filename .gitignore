@@ -1,0 +1,5 @@
+# Environemnt config does not go in the repo
+/.env
+
+# Do not include built binaries
+/dist
