@@ -1,0 +1,172 @@
+#!/bin/bash
+set -e
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+[[ -f .env ]] && source .env
+
+# Capture args asap
+COMMAND="$(basename "$0")"
+MODE="$1"
+RELEASE_TAG="$2"
+
+usage() {
+  echo "Usage: $COMMAND create <tag>       - tag, build and upload a new relese"
+  echo "   or: $COMMAND entry <tag>        - create release entry on GitHub"
+  echo "   or: $COMMAND build              - compile code for distribution"
+  echo "   or: $COMMAND upload <tag>       - add files to a release"
+  echo "   or: $COMMAND check-all-commited - checks for uncommited changes"
+  echo "   or: $COMMAND check-on-tag <tag> - checks that git HEAD matches tag"
+  echo "   or: $COMMAND help"
+}
+
+error() {
+  echo >&2 "$@"
+}
+
+wrong-usage-error() {
+  usage
+  error "Error: invalid command invoked"
+  exit 2
+}
+
+required-var-error() {
+  error "Error: required variable $1 was not set"
+  exit 2
+}
+
+init() {
+  # Check required variables
+  [ -z "$RELEASE_GITHUB_TOKEN" ] && required-var-error "RELEASE_GITHUB_TOKEN"
+  [ -z "$RELEASE_GITHUB_USER" ]  && required-var-error "RELEASE_GITHUB_USER"
+  [ -z "$RELEASE_GITHUB_REPO" ]  && required-var-error "RELEASE_GITHUB_REPO"
+
+  # Ensure optinal vars are set correctly
+  [ -z "$RELEASE_DIST_DIR"]    && RELEASE_DIST_DIR="dist"
+  [ -z "$RELEASE_GO_PACKAGE" ] && RELEASE_GO_PACKAGE="."
+  [ -z "$RELEASE_GIT_BRANCH" ] && RELEASE_GIT_BRANCH="master"
+  [ -z "$RELEASE_GIT_REMOTE" ] && RELEASE_GIT_REMOTE="origin"
+}
+
+github-release-vars() {
+  export GITHUB_TOKEN="$RELEASE_GITHUB_TOKEN"
+  export GITHUB_USER="$RELEASE_GITHUB_USER"
+  export GITHUB_REPO="$RELEASE_GITHUB_REPO"
+}
+
+release-create() {
+  check-all-commited
+  check-all-pushed
+  release-entry
+  fetch-tags
+  check-on-tag
+  release-build
+  release-upload
+}
+
+fetch-tags() {
+  echo "==> Fetching newly created tags"
+  git fetch --tags
+}
+
+check-on-tag() {
+  echo "==> Ensuring we are on tag $RELEASE_TAG"
+
+  # Get commit we're on
+  HEAD_COMMIT="$(git rev-parse --revs-only HEAD)"
+
+  # Get commit tag is on
+  if ! TAG_COMMIT="$(git rev-parse --revs-only --verify --quiet tags/"$RELEASE_TAG" --)"; then
+    error "Error: tag $RELEASE_TAG does not exist"
+    exit 1
+  fi
+
+  # Make sure commits match
+  if [[ "$HEAD_COMMIT" != "$TAG_COMMIT" ]]; then
+    error "Error: you are not on tag $RELEASE_TAG"
+    error "Tag commit:  $TAG_COMMIT"
+    error "HEAD commit: $HEAD_COMMIT"
+    exit 1
+  fi
+
+  return 0
+}
+
+check-all-pushed() {
+  echo "==> Ensuring all local commits are pushed"
+
+  # Get commit we're on
+  LOCAL_HEAD_COMMIT="$(git rev-parse --revs-only HEAD)"
+
+  # Get commit the remote is on
+  if ! REMOTE_HEAD_COMMIT="$(git rev-parse --revs-only --verify --quiet "$RELEASE_GIT_REMOTE"/"$RELEASE_GIT_BRANCH" --)"; then
+    error "Error: branch $RELEASE_GIT_REMOTE/$RELEASE_GIT_BRANCH does not exist"
+    exit 1
+  fi
+
+  # Make sure commits match
+  if [[ "$LOCAL_HEAD_COMMIT" != "$REMOTE_HEAD_COMMIT" ]]; then
+    error "Error: local and remote HEAD are different"
+    error "Local HEAD:  $LOCAL_HEAD_COMMIT"
+    error "Remote HEAD: $REMOTE_HEAD_COMMIT"
+    exit 1
+  fi
+
+  return 0
+}
+
+check-all-commited() {
+  echo "==> Ensuring everything is commited"
+
+  STATUS="$(git status --porcelain)"
+
+  if [[ -n "$STATUS" ]]; then
+    error "Error: you have uncommited files, commit or stash them"
+    error "$STATUS"
+    exit 1
+  fi
+}
+
+release-entry() {
+  echo "==> Creating release $RELEASE_TAG"
+  github-release-vars
+  github-release release --tag "$RELEASE_TAG"
+}
+
+release-build() {
+  echo "==> Building the code"
+  [ -d "$RELEASE_DIST_DIR" ] && rm -rf "$RELEASE_DIST_DIR"
+  gox -cgo -output "$RELEASE_DIST_DIR/{{.OS}}_{{.Arch}}_{{.Dir}}" "$RELEASE_GO_PACKAGE"
+}
+
+release-upload() {
+  echo "==> Uploading binaries for $RELEASE_TAG"
+  github-release-vars
+
+  for FILE in "$RELEASE_DIST_DIR"/*; do
+    echo "--> $FILE"
+
+    FILENAME="$(basename "$FILE")"
+    github-release upload --tag "$RELEASE_TAG" \
+      --name "$FILENAME" \
+      --file "$FILE"
+  done
+}
+
+ensure-tag-specified() {
+  if [ -z "$RELEASE_TAG" ]; then
+    usage
+    error "Error: no tag specified"
+    exit 2
+  fi
+  return 0
+}
+
+case "$MODE" in
+  "create" )  ensure-tag-specified && init && release-create ;;
+  "entry"  )  ensure-tag-specified && init && release-entry ;;
+  "build"  )  init && release-build ;;
+  "upload" )  ensure-tag-specified && init && release-upload ;;
+  "check-all-commited" )  init && check-all-commited ;;
+  "check-on-tag"       )  ensure-tag-specified && init && check-on-tag ;;
+  "help" )  usage ;;
+  *      )  wrong-usage-error ;;
+esac
