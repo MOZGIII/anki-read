@@ -18,13 +18,13 @@ func main() {
 
 		p, err := anki.ReadFile(pkg)
 		if err != nil {
-			fmt.Println(err)
+			log.Println(err)
 			os.Exit(2)
 		}
 
 		c, err := p.Collection.DB.Cards()
 		if err != nil {
-			fmt.Println(err)
+			log.Println(err)
 			os.Exit(2)
 		}
 
