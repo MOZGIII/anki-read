@@ -1,0 +1,11 @@
+language: go
+
+go:
+  - 1.6
+  - tip
+
+install:
+  - bin/setup
+
+script:
+  - go build -v .
