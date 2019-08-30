@@ -3,9 +3,3 @@ language: go
 go:
   - "1.12"
   - tip
-
-install:
-  - bin/setup
-
-script:
-  - go build -v .
